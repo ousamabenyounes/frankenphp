@@ -5,6 +5,7 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
     branches:
       - main
     paths:
@@ -38,6 +39,8 @@ env:
 jobs:
   prepare:
     runs-on: ubuntu-24.04
+    env:
+      FULL_BUILD_MATRIX: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ready to test') }}
     outputs:
       # Push if it's a scheduled job, a tag, or if we're committing to the main branch
       push: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.version) || startsWith(github.ref, 'refs/tags/') || (github.ref == 'refs/heads/main' && github.event_name != 'pull_request')) && true || false }}
@@ -62,6 +65,8 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Preserve matrix script
+        run: cp .github/scripts/ci-build-matrix.sh "${RUNNER_TEMP}/ci-build-matrix.sh"
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
       - name: Login to DockerHub
@@ -74,7 +79,6 @@ jobs:
         id: check
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          FULL_BUILD_MATRIX: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-build-matrix') }}
         run: ./.github/scripts/docker-compute-fingerprints.sh
       - name: Create variants matrix
         if: ${{ !fromJson(steps.check.outputs.skip) }}
@@ -84,13 +88,12 @@ jobs:
           set -e
           METADATA="$(docker buildx bake --print | jq -c)"
           echo metadata="${METADATA}" >> "${GITHUB_OUTPUT}"
-          METADATA="${METADATA}" ./.github/scripts/ci-build-matrix.sh docker "${FULL_BUILD_MATRIX}"
+          METADATA="${METADATA}" "${RUNNER_TEMP}/ci-build-matrix.sh" docker "${FULL_BUILD_MATRIX}"
         env:
           SHA: ${{ github.sha }}
           VERSION: ${{ (github.ref_type == 'tag' && github.ref_name) || steps.check.outputs.ref || 'dev' }}
           PHP_VERSION: ${{ steps.check.outputs.php_version }}
           REBUILD_VARIANTS: ${{ steps.check.outputs.rebuild_variants }}
-          FULL_BUILD_MATRIX: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-build-matrix') }}
   build:
     runs-on: ${{ startsWith(matrix.platform, 'linux/arm') && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     needs:

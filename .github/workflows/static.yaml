@@ -6,6 +6,7 @@ concurrency:
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
     branches:
       - main
     paths:
@@ -44,6 +45,8 @@ env:
 jobs:
   prepare:
     runs-on: ubuntu-24.04
+    env:
+      FULL_BUILD_MATRIX: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ready to test') }}
     outputs:
       push: ${{ toJson((steps.check.outputs.ref || (github.event_name == 'workflow_dispatch' && inputs.version) || startsWith(github.ref, 'refs/tags/') || (github.ref == 'refs/heads/main' && github.event_name != 'pull_request')) && true || false) }}
       platforms: ${{ steps.matrix.outputs.platforms }}
@@ -66,6 +69,12 @@ jobs:
           REF: ${{ (github.ref_type == 'tag' && github.ref_name) || (github.event_name == 'workflow_dispatch' && inputs.version) || '' }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
+      - name: Preserve matrix script
+        run: cp .github/scripts/ci-build-matrix.sh "${RUNNER_TEMP}/ci-build-matrix.sh"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.check.outputs.ref != ''
+        with:
           ref: ${{ steps.check.outputs.ref }}
           persist-credentials: false
       - name: Set up Docker Buildx
@@ -76,12 +85,11 @@ jobs:
           METADATA="$(docker buildx bake --print static-builder-musl | jq -c)"
           GNU_METADATA="$(docker buildx bake --print static-builder-gnu | jq -c)"
           echo metadata="${METADATA}" >> "${GITHUB_OUTPUT}"
-          METADATA="${METADATA}" ./.github/scripts/ci-build-matrix.sh static "${FULL_BUILD_MATRIX}"
+          METADATA="${METADATA}" "${RUNNER_TEMP}/ci-build-matrix.sh" static "${FULL_BUILD_MATRIX}"
           echo gnu_metadata="${GNU_METADATA}" >> "${GITHUB_OUTPUT}"
         env:
           SHA: ${{ github.sha }}
           VERSION: ${{ steps.check.outputs.ref || 'dev' }}
-          FULL_BUILD_MATRIX: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-build-matrix') }}
 
   build-linux-musl:
     permissions:
